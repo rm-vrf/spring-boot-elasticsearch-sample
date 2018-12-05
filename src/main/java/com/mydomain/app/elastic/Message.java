@@ -2,6 +2,9 @@ package com.mydomain.app.elastic;
 
 import java.util.Date;
 
+import org.springframework.data.elasticsearch.annotations.Document;
+
+@Document(indexName = "message", type = "data")
 public class Message {
 	private String id;
 	private Date time;

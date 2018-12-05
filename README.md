@@ -103,4 +103,15 @@ $ curl http://localhost:8080/actuator/health
         }
     }
 }
+
+curl -XPOST http://localhost:8080/api/v1/message -H 'Content-Type:application/json' -d '{
+    "time": 1543984834000,
+    "sender": "user962206",
+    "receiver": "dans00",
+    "title": "What is the unix time stamp",
+    "body": "The unix time stamp is a way to track time as a running total of seconds. This count starts at the Unix Epoch on January 1st, 1970 at UTC"
+}'
+
+curl -XPOST localhost:8080/api/v1/message/_search -H 'Content-Type:application/json' -d 'unix'
+
 ```
