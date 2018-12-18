@@ -34,9 +34,6 @@ import org.springframework.stereotype.Service;
 public class MessageService {
 
 	private static final Logger LOG = LoggerFactory.getLogger(MessageService.class);
-	private static final String ALIAS_NAME = "message";
-	private static final String INDEX_NAME_PREFIX = "message-";
-	private static final String TYPE_NAME = "data";
 	private static final ThreadLocal<DateFormat> DATE_FORMAT = new ThreadLocal<DateFormat>() {
 		protected DateFormat initialValue() {
 			return new SimpleDateFormat("yyyyMMdd");
@@ -48,7 +45,7 @@ public class MessageService {
 
 	@PostConstruct
 	public void init() throws IOException, InterruptedException, ExecutionException {
-		XContentBuilder json = XContentFactory.jsonBuilder().startObject().startObject(TYPE_NAME)
+		XContentBuilder json = XContentFactory.jsonBuilder().startObject().startObject(Message.TYPE_NAME)
 				.startObject("properties")
 				.startObject("body").field("type", "string").endObject()
 				.startObject("id").field("type", "string").endObject()
@@ -59,9 +56,11 @@ public class MessageService {
 				.endObject().endObject().endObject();
 
 		PutIndexTemplateRequestBuilder req = elasticsearchTemplate.getClient().admin().indices()
-				.preparePutTemplate(ALIAS_NAME).setTemplate(INDEX_NAME_PREFIX + "*").setSettings(Settings
-						.builder().put("index.number_of_shards", "8").put("index.number_of_replicas", "1").build())
-				.addMapping(TYPE_NAME, json).addAlias(new Alias(ALIAS_NAME));
+				.preparePutTemplate(Message.ALIAS_NAME)
+				.setTemplate(Message.ALIAS_NAME + "-*")
+				.setSettings(Settings.builder().put("index.number_of_shards", "8").put("index.number_of_replicas", "1").build())
+				.addMapping(Message.TYPE_NAME, json)
+				.addAlias(new Alias(Message.ALIAS_NAME));
 
 		PutIndexTemplateResponse resp = req.execute().get();
 		LOG.info("create template: {}", resp.isAcknowledged());
@@ -70,20 +69,25 @@ public class MessageService {
 	public String postMessage(Message message) {
 
 		String date = DATE_FORMAT.get().format(message.getTime());
-		String indexName = INDEX_NAME_PREFIX + date;
-		message.setId(String.format("%s-%s", UUID.randomUUID().toString(), date));
+		String indexName = Message.ALIAS_NAME + "-" + date;
+		message.setId(UUID.randomUUID().toString() + "-" + date);
 
-		IndexQuery indexQuery = new IndexQueryBuilder().withIndexName(indexName).withType(TYPE_NAME)
-				.withId(message.getId()).withObject(message).build();
+		IndexQuery indexQuery = new IndexQueryBuilder()
+				.withIndexName(indexName)
+				.withType(Message.TYPE_NAME)
+				.withId(message.getId())
+				.withObject(message).build();
 
 		return elasticsearchTemplate.index(indexQuery);
 	}
 
 	public Message getMessage(String id) {
 		String date = id.substring(id.length() - "yyyyMMdd".length());
-		String indexName = INDEX_NAME_PREFIX + date;
+		String indexName = Message.ALIAS_NAME + "-" + date;
 
-		SearchQuery query = new NativeSearchQueryBuilder().withIndices(indexName).withTypes(TYPE_NAME)
+		SearchQuery query = new NativeSearchQueryBuilder()
+				.withIndices(indexName)
+				.withTypes(Message.TYPE_NAME)
 				.withIds(Arrays.asList(id)).build();
 
 		List<Message> list = elasticsearchTemplate.multiGet(query, Message.class);
@@ -95,8 +99,8 @@ public class MessageService {
 		LOG.info("query string: {}", query);
 		
 		SearchQuery searchQuery = new NativeSearchQueryBuilder()
-				.withIndices(ALIAS_NAME)
-				.withTypes(TYPE_NAME)
+				.withIndices(Message.ALIAS_NAME)
+				.withTypes(Message.TYPE_NAME)
 				.withQuery(QueryBuilders.queryStringQuery(query))
 				.withPageable(PageRequest.of(page, size, Sort.by(Sort.Order.desc("time"))))
 				.build();
@@ -106,9 +110,9 @@ public class MessageService {
 
 	public void deleteMessage(String id) {
 		String date = id.substring(id.length() - "yyyyMMdd".length());
-		String indexName = INDEX_NAME_PREFIX + date;
+		String indexName = Message.ALIAS_NAME + "-" + date;
 		
-		elasticsearchTemplate.delete(indexName, TYPE_NAME, id);
+		elasticsearchTemplate.delete(indexName, Message.TYPE_NAME, id);
 	}
 
 }

@@ -4,8 +4,12 @@ import java.util.Date;
 
 import org.springframework.data.elasticsearch.annotations.Document;
 
-@Document(indexName = "message", type = "data")
+@Document(indexName = Message.ALIAS_NAME, type = Message.TYPE_NAME)
 public class Message {
+	
+	public static final String ALIAS_NAME = "message";
+	public static final String TYPE_NAME = "data";
+
 	private String id;
 	private Date time;
 	private String sender;
