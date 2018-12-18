@@ -356,52 +356,48 @@ Elasticsearch 查询接口返回分页数据，默认页长是 `20`. 有一些�
 
 ### 3.2 注意索引延时
 
-为了提高吞吐量，写入 Elasticsearch 的数据不会立刻写进索引，而是先写 `translog` 文件，然后立刻写入 `index buffer`，这个时刻数据是不能被检索到的。如果这时发生断电或崩溃，`index buffer` 里面的数据会丢失。重新启动之后，Elasticsearch 会从 `translog` 恢复最近写入的数据。Elasticsearch 在空闲的时候从 `index buffer` 中读出数据刷盘存储，直到这个时候数据才能被查询到。默认的刷盘时间是 `1` 秒，也就是说，保存到 Elasticsearch 的数据有可能几百毫秒之后才能被查询到。
+为了提高吞吐量，写入 Elasticsearch 的数据不会立刻写进索引，而是先写 `translog` 文件，再写入 `index buffer`，这个时刻数据是不能被检索到的。如果这时发生断电或崩溃，`index buffer` 里面的数据会丢失。重新启动之后，Elasticsearch 会从 `translog` 恢复最近写入的数据。Elasticsearch 在空闲的时候从 `index buffer` 中读出数据刷盘，直到这个时候数据才能被查询到。默认的刷盘时间是 `1` 秒，也就是说，保存到 Elasticsearch 的数据几百毫秒之后才能被查询到。
 
-使用 Elasticsearch 要注意这个现象，设计的时候要避免出现索引数据需要立刻被查询到的情况。比如在页面中输入数据，按下提交按钮之后保存数据，跳转到列表页面，在列表页面按照查询条件需要查到刚才输入的数据。
+使用 Elasticsearch 要注意这个现象，设计的时候要避免出现索引数据需要立刻查询的情况。比如在表单页面输入数据，按下提交按钮之后保存数据，跳转到列表页面，在列表页面按照查询条件需要查到刚才输入的数据。如果保存和跳转速度比较快，列表页面很可能无法查询到刚才输入的数据，让用户很迷惑。
 
-### 3.3 避免深度聚合查询
+有两个办法可以解决索引延时问题：
 
-- 聚合查询要预估数据量，过深或过宽的聚合查询会占用大量内存，在多个上字段做聚合查询结果数量是这些字段的 term 数量相乘，有可能造成 elasticsearch 停顿甚至掉线。要预估内存占用量和操作的时间；
+- 索引数据之后立刻做一次 `refresh` 操作，强制刷盘。这样可以避免延时，但是会影响性能；
+- 想办法把 `search` 操作改成 `get` 操作，`get` 操作不存在延时问题。
+
+### 3.3 注意聚合查询的内存消耗
+
+聚合查询可能会消耗大量的内存。即使索引中只有很少的文档，一个 5 到 6 层深度的聚合查询可能占用高达 8G 的内存；对多个字段发起 `term` 聚合也会形成 m * n 个 `bucket`，也会占用巨大的内存。聚合查询需要根据查询的结构和数据量、分词方式预先估算内存使用量。
 
 ### 3.4 控制查询线程数
 
-- 长延时的查询会占用大量的系统资源。如果长延时查询过多，要控制 search 线程的数量，避免查询压力过大造成性能雪崩；
+当大量查询并发运行的时候，可能会造成CPU、IO、内存压力爆发性增长，拖慢系统的运行速度，造成每个查询的响应时间都很长，甚至系统卡死，不能响应更多的请求。所以需要对查询线程的数量和队列长度进行控制，及时拒绝掉超出运行能力的查询请求。使用下面的命令可以修改查询线程参数：
+
+```shell
+$ curl -XPUT localhost:9200/_cluster/settings -d '{
+    "persistent" : {
+        "threadpool.search.size" : 30,
+        "threadpool.search.queue_size": 100
+    }
+}'
+```
 
 ### 3.5 控制通配符查询
 
-- 通配符查询要注意词长度，避免查询膨胀度过大。elasticsearch 首先会按照通配符查找词库，把通配符条件改写成 `bool` 条件，组合成多个 `should` 再进行查询。如果通配词过短，会匹配出大量的查询词，造成查询膨胀度过大。可以控制通配符的长度必须在 n 个字母以上，或者设置 `top_terms_N` 改写条件，只保留最符合的 n 个词。
+进行前缀查询或者通配符查询的时候，Elasticsearch 把通配符转成多个关键词，改写成 `bool` 查询的 `should` 子句。如果输入的通配符很短，比如 `th*`，会匹配到大量的词，改写查询的关键词数量就会很多，造成查询膨胀度过大，执行速度很慢。
+
+解决办法是控制查询词的长度，必须大于某个最低长度才能发起查询；另一个办法是设置 `top_terms_N` 改写条件，把最符合通配符的 `N` 写入查询。比如在前缀查询中控制改写长度：
 
 ```shell
-对全文检索、分词、文档得分算法有一些知识还是必要的
-
-“This is a sentence a b c”
-“This is a sentence a b c”
-“This is a sentence a b c d”
-
-“a” – 6
-“This” – 3
-“is” – 3
-“sentence” – 3
-“b” – 3
-“c” – 3
-“d” – 1
-
-“This is a sentence a b c” – 2
-“This is a sentence a b c d” – 1
+{
+    "query": {
+        "prefix": {
+            "name": {
+                "value": "j",
+                "rewrite": "top_terms_20"
+            }
+        }
+    }
+}
 ```
-
-```
-cluster.name: elasticsearch_production
-gateway.recover_after_nodes: 10
-gateway.expected_nodes: 10
-gateway.recover_after_time: 5m
-minimum_master_nodes
-discovery.zen.minimum_master_nodes: 2
-
-(N/2) + 1
-
-curl -XPOST localhost:8080/api/v1/message/_search -H 'Content-Type:application/json' -d 'unix'
-```
-
 
